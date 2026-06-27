@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import ast
+import asyncio
 from typing import Annotated, Any, Literal
 from typing_extensions import TypedDict, NotRequired
 from dotenv import load_dotenv
@@ -182,7 +184,7 @@ def run_and_parse(sql_query):
             try:
                 return json.loads(res)
             except json.JSONDecodeError:
-                return eval(res)
+                return ast.literal_eval(res)
         return res
     except Exception as e:
         print(f"Database Error: {e}")
@@ -193,8 +195,8 @@ async def custom_run_query_node(state: AgentState):
     tool_call = last_message.tool_calls[0]
     query = tool_call["args"]["query"]
     call_id = tool_call["id"]
-            
-    data = run_and_parse(query)
+
+    data = await asyncio.to_thread(run_and_parse, query)
     clean_data_for_llm = []
     categorized_raw_data = {}
 
