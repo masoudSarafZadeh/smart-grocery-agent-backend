@@ -303,4 +303,3 @@ builder.add_edge("run_query", "generate_answer")
 builder.add_edge("generate_answer", END)
 builder.add_edge("general_answer", END)
 
-agent = builder.compile()
