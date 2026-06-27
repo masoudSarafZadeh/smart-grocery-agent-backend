@@ -3,46 +3,21 @@ import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from langserve import add_routes
-from agent import agent, pool
+from agent import builder
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 # Initialize Langfuse tracking
 langfuse = Langfuse()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Manages the startup and shutdown lifecycles of the FastAPI application.
-    Handles database connection pooling and LangGraph checkpointer initialization.
-    """
-    # Startup Logic
-    print("Opening Async Postgres Connection Pool...")
-    await pool.open()
-    
-    print("Setting up Async Postgres Checkpointer...")
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()
-    
-    # Dynamically inject the checkpointer into the compiled graph
-    agent.checkpointer = checkpointer
-    print("Database, Async Checkpointer, and Graph Tracing are fully ready!")
-    
-    yield
-    
-    # Shutdown Logic
-    print("Closing Async Postgres Connection Pool...")
-    await pool.close()
-    langfuse.flush()
-    print("Database Pool disconnected cleanly.")
-
-# Initialize FastAPI App with Lifespan Context Manager
-app = FastAPI(
-    title="Grocery Shopping Agent Backend",
-    version="1.0",
-    description="LangGraph backend server for Android client",
-    lifespan=lifespan
+# Define the pool
+pool = AsyncConnectionPool(
+    conninfo=os.getenv("DATABASE_URL"),
+    max_size=20,
+    kwargs={"autocommit": True},
+    open=False # Don't open connections until lifespan runs
 )
 
 async def langfuse_config_modifier(config: dict, request: Request) -> dict:
@@ -70,16 +45,16 @@ async def langfuse_config_modifier(config: dict, request: Request) -> dict:
                 if "configurable" not in config:
                     config["configurable"] = {}
                 config["configurable"]["thread_id"] = str(raw_thread_id)
-                print(f"Injected thread_id into Config: {raw_thread_id}")
+                print(f"🔗 Injected thread_id into Config: {raw_thread_id}")
     except Exception as e:
-        print(f"Failed to parse raw request body: {e}")
+        print(f"⚠️ Failed to parse raw request body: {e}")
 
     # Fallback mechanism to safeguard against Graph initialization crashes
     if "configurable" not in config:
         config["configurable"] = {}
     if "thread_id" not in config["configurable"] or not config["configurable"]["thread_id"]:
         config["configurable"]["thread_id"] = "default_playground_session"
-        print("Fallback triggered: Injected 'default_playground_session'")
+        print("🔗 Fallback triggered: Injected 'default_playground_session'")
 
     # Inject Langfuse Callback Handler for LangChain/LangGraph Tracing
     langfuse_handler = CallbackHandler()
@@ -89,14 +64,50 @@ async def langfuse_config_modifier(config: dict, request: Request) -> dict:
     
     return config
 
-# Register LangServe Routes mapping the Agent Graph
-add_routes(
-    app, 
-    agent, 
-    path="/shopping-agent", 
-    config_keys=["configurable"], 
-    per_req_config_modifier=langfuse_config_modifier,
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manages the startup and shutdown lifecycles of the FastAPI application.
+    Handles database connection pooling and LangGraph checkpointer initialization.
+    """
+    # Startup Logic
+    print("Opening Async Postgres Connection Pool...")
+    await pool.open()
+    
+    print("Setting up Async Postgres Checkpointer...")
+    checkpointer = AsyncPostgresSaver(pool)
+    await checkpointer.setup()
+
+    print("Compiling Agent with Live Checkpointer...")
+    agent = builder.compile(checkpointer=checkpointer)
+
+    print("Registering LangServe Routes dynamically...")
+    add_routes(
+        app, 
+        agent, 
+        path="/shopping-agent", 
+        config_keys=["configurable"], 
+        per_req_config_modifier=langfuse_config_modifier,
+    )
+    
+    print("Database, Async Checkpointer, and Graph Tracing are fully ready!")
+    yield
+    
+    # Shutdown Logic
+    print("Closing Async Postgres Connection Pool...")
+    await pool.close()
+    langfuse.flush()
+    print("Database Pool disconnected cleanly.")
+
+# Initialize FastAPI App with Lifespan Context Manager
+app = FastAPI(
+    title="Grocery Shopping Agent Backend",
+    version="1.0",
+    description="LangGraph backend server for Android client",
+    lifespan=lifespan
 )
+
 
 if __name__ == "__main__":
     import uvicorn
