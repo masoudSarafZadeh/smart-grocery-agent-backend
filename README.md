@@ -64,7 +64,7 @@ Run a silent module setup installation using python package manager tracking:
 pip install --no-cache-dir -r requirements.txt
 ```
 
-3. Setup Private Vault Configurations
+### 3. Setup Private Vault Configurations
 Initialize your production variable file by safely copying the repository distribution asset:
 
 ```bash
@@ -78,10 +78,10 @@ GROQ_API_KEY=gsk_your_production_groq_credential_string
 GOOGLE_API_KEY=AIzaSy_your_production_gemini_credential_string
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=[https://cloud.langfuse.com](https://cloud.langfuse.com)
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
-4. Execute the Application Instance
+### 4. Execute the Application Instance
 Initialize the live streaming backend server deployment locally:
 
 ```bash
@@ -89,7 +89,7 @@ python main.py
 ```
 Once initialized, the service mounts a default web application layer accessible at http://localhost:7860/shopping-agent/playground.
 
-🐳 Docker Deployment Pipeline
+## Docker Deployment Pipeline
 To containerize, optimize, and launch the application using insulated container primitives:
 
 Build the Image
@@ -128,7 +128,7 @@ All active downstream responses passing through the graph payload yield an expli
         "price_after_off": 29000,
         "off_percent": 15,
         "llm_guide": "recommended",
-        "image": "[https://supabase-storage-url.com/zar_macaroni.png](https://supabase-storage-url.com/zar_macaroni.png)"
+        "image": "https://supabase-storage-url.com/zar_macaroni.png"
       }
     ]
   }
