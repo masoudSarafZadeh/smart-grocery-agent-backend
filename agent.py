@@ -53,17 +53,18 @@ db = SQLDatabase.from_uri(
 toolkit = SQLDatabaseToolkit(db=db, llm=groq_model)
 tools = toolkit.get_tools()
 
-gemini_with_tools = gemini_model.bind_tools(tools)
-groq_with_tools = groq_model.bind_tools(tools)
-
-# Router Fallback Strategy: Groq as primary, Gemini as backup
-model = groq_with_tools.with_fallbacks([gemini_with_tools])
-
 run_query_tool = next(tool for tool in tools if tool.name == "sql_db_query")
 run_query_tool.description = (
     "Execute a SQL query against the database and return the result. "
     "Pass the exact SQL string into the query argument."
 )
+
+gemini_with_tools = gemini_model.bind_tools(run_query_tool)
+groq_with_tools = groq_model.bind_tools(run_query_tool)
+
+# Router Fallback Strategy: Groq as primary, Gemini as backup
+model = groq_with_tools.with_fallbacks([gemini_with_tools])
+
 
 # 3. Graph State Definition
 class AgentState(TypedDict):
@@ -153,28 +154,13 @@ Database Context: {context}
 Response (in Persian):
 """
 
-GENERAL_CHAT_PROMPT = """
-You are a brilliant, friendly, and honest sales assistant for a grocery mobile application named "افق کوروش". 
-The user is asking a general question, greeting you, or asking for a recipe/cooking advice.
-
-CRITICAL RULES FOR GROCERY CONTEXT:
-1. **Friendly & Brief**: Speak in a warm, polite, and energetic Persian tone. Keep responses relatively short and sweet since this is a mobile chat.
-2. **Recipe / Cooking Requests**: If the user asks for a recipe (e.g., how to make Ghormeh Sabzi, a cake, etc.):
-   - Step 1: Briefly list the main ingredients needed.
-   - Step 2: Give a super simple, step-by-step cooking guide.
-   - Step 3: Enthusiastically remind them that they can buy all these fresh ingredients right now from our "OK Market" app! (e.g., "راستی، می‌تونی همه این مواد اولیه تازه رو همین الان از افق کوروش سفارش بدی!").
-3. **Greetings**: If they say hello, welcome them warmly to OK Market and ask what groceries they are looking for today.
-4. **No Database assumptions**: Do not mention specific store prices or inventory counts here, as this node does not query the live database. Just focus on being a helpful shopping companion.
-
-Response (in Persian):
-"""
-
 # 5. Graph Nodes Definition
 async def generate_query(state: AgentState, config: RunnableConfig):
     system_message = SystemMessage(content=GENERATE_QUERY_SYSTEM_PROMPT)
     standard_messages = convert_to_messages(state["messages"])
     messages_to_send = [system_message] + standard_messages
-    response = await model.ainvoke(messages_to_send, config=config)
+    taged_model = model.with_config(config={"max_tokens": 150,"tags": ["final_answer_stream"],})
+    response = await taged_model.ainvoke(messages_to_send, config=config)
     return {"messages": [response]}
 
 def run_and_parse(sql_query):
@@ -268,40 +254,23 @@ async def generate_answer(state: AgentState, config: RunnableConfig):
     
     return {"messages": [AIMessage(content=response.content)]}
 
-async def general_answer_node(state: AgentState, config: RunnableConfig):
-    messages = state["messages"]
-    last_ai_message = messages[-1]
-    clean_history = messages[:-1]
-    system_message = SystemMessage(content=GENERAL_CHAT_PROMPT)
-    messages_to_send = [system_message] + convert_to_messages(clean_history)
     
-    fast_model = model.with_config(config={"max_tokens": 300, "tags": ["final_answer_stream"]})
-    response = await fast_model.ainvoke(messages_to_send, config=config)
-    
-    return {
-        "messages": [
-            RemoveMessage(id=last_ai_message.id),
-            AIMessage(content=response.content)
-        ]
-    }
-    
-def should_continue(state: AgentState) -> Literal["general_answer", "run_query"]:
+def should_continue(state: AgentState) -> Literal["__end__", "run_query"]:
     messages = state["messages"]
     last_message = messages[-1]
     if not last_message.tool_calls:
-        return "general_answer"
-    return "run_query"
+        return END
+    else:
+        return "run_query"
 
 # 6. StateGraph Compilation
 builder = StateGraph(AgentState)
 builder.add_node("generate_query", generate_query)
 builder.add_node("run_query", custom_run_query_node)
 builder.add_node("generate_answer", generate_answer)
-builder.add_node("general_answer", general_answer_node)
 
 builder.add_edge(START, "generate_query")
 builder.add_conditional_edges("generate_query", should_continue)
 builder.add_edge("run_query", "generate_answer")
 builder.add_edge("generate_answer", END)
-builder.add_edge("general_answer", END)
 
